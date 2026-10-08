@@ -1,0 +1,110 @@
+# Builds DBD-RegionSwitcher.exe from the tagged source on GitHub's own Windows machine, runs the tests that need no
+# game and no user's PC, and attaches the .exe to a DRAFT release with its SHA-256 and a signed build attestation
+# (proof that this exact file was built here from this commit). Nothing is public until the draft is published by hand.
+#
+#   Release:     git tag v1.0 && git push origin v1.0        (the tag must match $ToolVersion)
+#   Dry run:     Actions > Release > Run workflow            (builds and tests; the .exe is a run artifact, no release)
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write           # create the draft release
+      id-token: write           # build attestation (Sigstore)
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+
+      - name: Tag matches the tool's version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: powershell
+        run: |
+          $src = Get-Content src\main\01-startup.ps1 -Raw
+          $v = [regex]::Match($src, '\$ToolVersion = ''([^'']+)''').Groups[1].Value
+          if ("v$v" -ne $env:GITHUB_REF_NAME) {
+            throw "tag $env:GITHUB_REF_NAME doesn't match `$ToolVersion '$v' (src\main\01-startup.ps1)"
+          }
+
+      - name: Build
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -Exe
+          if ($LASTEXITCODE -or -not (Test-Path DBD-RegionSwitcher.exe)) { throw 'build failed' }
+
+      - name: Static checks
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File verify\static-check.ps1
+          if ($LASTEXITCODE) { throw 'static-check failed' }
+
+      # The tests that need no DBD; the rest run on a PC (verify\run-elevated.ps1, verify\ui-check.ps1).
+      - name: Tests
+        shell: powershell
+        run: |
+          foreach ($t in 'test-gate','test-hosts','test-links') {
+            powershell -NoProfile -ExecutionPolicy Bypass -File "verify\$t.ps1" | Select-Object -Last 1
+            if ($LASTEXITCODE) { throw "$t failed" }
+          }
+
+      - name: SHA-256
+        shell: powershell
+        run: |
+          $h = (Get-FileHash DBD-RegionSwitcher.exe -Algorithm SHA256).Hash
+          [IO.File]::AppendAllText($env:GITHUB_ENV, "EXE_SHA256=$h`n")
+          "SHA-256: $h"
+
+      - name: Upload (dry run)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9   # v7.0.2
+        with:
+          name: DBD-RegionSwitcher
+          path: DBD-RegionSwitcher.exe
+
+      - name: Build attestation
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6   # v4.2.2
+        with:
+          subject-path: DBD-RegionSwitcher.exe
+
+      - name: Draft release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          $v = $env:GITHUB_REF_NAME.Substring(1)
+          $changelog = Get-Content CHANGELOG.md -Raw
+          $section = "(?ms)^## $([regex]::Escape($v))\b[^\n]*\n(.*?)(?=^## |\z)"
+          $log = [regex]::Match($changelog, $section).Groups[1].Value.Trim()
+          $notes = @(
+            ('**Download:** `DBD-RegionSwitcher.exe` below. Windows 10 / 11; it asks for admin rights (UAC) ' +
+              'when it starts.')
+            ''
+            'Windows may show "Windows protected your PC" for a new download: click **More info** > **Run anyway**.'
+            ''
+            "SHA-256: ``$env:EXE_SHA256``"
+            ''
+            "Built by GitHub Actions from this tag's source. To check that your copy is that build:"
+            "``gh attestation verify DBD-RegionSwitcher.exe --repo $env:REPO``"
+            ''
+            '## Changes'
+            ''
+            $log
+          ) -join "`n"
+          $notesFile = "$env:RUNNER_TEMP\notes.md"
+          [IO.File]::WriteAllText($notesFile, $notes, (New-Object Text.UTF8Encoding($false)))
+          $ghArgs = @('release', 'create', $env:GITHUB_REF_NAME, 'DBD-RegionSwitcher.exe', '--draft', '--verify-tag',
+            '--title', "DBD Region Switcher $v", '--notes-file', $notesFile)
+          gh @ghArgs
+          if ($LASTEXITCODE) { throw 'gh release create failed' }

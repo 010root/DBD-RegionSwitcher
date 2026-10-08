@@ -1,0 +1,46 @@
+name: Something doesn't work
+description: A switch that lands on the wrong region, an error, a crash, anything that looks wrong.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The session log is the most useful part: it records what the tool did and what DBD measured, with times.
+        In the tool: **Options > Open log folder** (Ctrl+L), then attach the `session-...log` file from when it
+        happened.
+        Logs hold no account names or passwords (paths in your user folder are written as %USERPROFILE%); they do
+        hold the addresses of the servers DBD connected to.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Roughly when (the log has times).
+    validations:
+      required: true
+  - type: dropdown
+    id: store
+    attributes:
+      label: Where your DBD is from
+      options:
+        - Steam
+        - Epic Games
+        - Xbox app / Game Pass
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Tool version
+      description: Bottom right of the window (e.g. v1.0).
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      description: e.g. Windows 11 24H2 (Settings > System > About), and your display scale if the window looks wrong.
+  - type: textarea
+    id: log
+    attributes:
+      label: Session log
+      description: Drag the log file here.
